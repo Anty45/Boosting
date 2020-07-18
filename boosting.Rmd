@@ -1,0 +1,283 @@
+---
+title: "boosting"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Statistique de base 
+
+##### 1. Proportions de spam
+
+On charge la librairie kernlab  nous permetttant de charger le jeu de donnée spam
+```{r}
+library(kernlab)
+data("spam")
+
+```
+
+__Determination des proportions.__
+On commence donc par determiner le nombre de spams (donc de non_spam egalement ).
+
+```{r}
+set.seed(9146301)
+ytable <- table(spam$type)
+ytable
+```
+
+Vu que la commande dim(spam)[1] nous retourne la dimension du jeu de données, on divise les nombres de spam puis de non spam par cette valeur pour avoir un ratio
+```{r}
+ratio_non_spam = ytable[1]/dim(spam)[1]
+ratio_spam = ytable[2]/dim(spam)[1]
+cbind(ratio_spam,ratio_non_spam)
+```
+
+__On a donc 40% de spam__
+
+_Quel est le taux d’erreur du classifieur constant qui pourrait servir de reference?_
+
+La proportion de non_spam est plus élévé que celle des spams. En prédisant tout le temps qu'on a des non spams, on aurait __une précision de 60%__. __On pourrait donc se servir du classifieur constant de non_spam__
+
+
+##### 2. train_test split 80-20
+
+On separe notre jeu de données en deux : le train comportera 80% de notre jeu de données et le test 20%. 
+On va essayer de conserver les differentes proportions du passage du train au test.
+```{r}
+library(caTools)
+set.seed(111)
+
+index <- sample.split(spam$type, SplitRatio = 0.80)
+
+# Construction du train  et du test
+spam.app = subset(spam,index == TRUE)
+spam.test = subset(spam , index == FALSE)
+```
+
+__Verification de la conservation des proportions : __
+
+```{r}
+b <- table(spam.app$type)
+c <- table(spam.test$type)
+
+ratio_spam_app = b[2]/dim(spam.app)[1]
+ratio_spam_test = c[2]/dim(spam.test)[1]
+cbind(ratio_spam_app,ratio_spam_test)
+```
+
+A des virgules près on a quasiment les mêmes propotions qu'on peut arrondir à 40%.
+
+
+### 3. Utilisation de Adaboost
+
+On commence par charger la librairie Adaboost
+
+```{r}
+library(fastAdaboost)
+```
+
+##### 3.1 Entrainement d'Adaboost
+
+Pour l'entrainement d'adaboost, on lui fournit : 
+** le type de variable à predire **
+** le jeu de données d'entrainement **
+** Les 10 iterations demandées dans l'énoncé **
+
+```{r}
+ada = adaboost(type~.,data = spam.app,nIter = 10)
+```
+
+
+__Evaluation des perfomances : erreur de train et de test__
+
+```{r}
+predictApp = predict(ada,newdata =spam.app)
+predictTest = predict(ada,newdata=spam.test)
+cbind(predictApp$error,predictTest$error)
+
+```
+
+L'erreur d'apprentissage est quasi nulle sur le jeu d'apprentissage. 
+Par contre, il se trompe dans 5.9% des cas sur le jeu de test.
+
+##### 4. Courbe d'evolution par iteration des erreurs en apprentissage et en test
+
+```{r}
+
+index_Global = vector()
+stackErrApp = vector()
+stackErrTest = vector()
+maxIter = 20
+
+for (i in 1:20) {
+  
+  ada = adaboost(type~., spam.app , i)
+  
+  index_Global = cbind(index_Global,i) # L'index
+  stackErrApp= cbind(stackErrApp,(predict(ada,newdata =spam.app))$error) # L'erreur correspondante
+  stackErrTest= cbind(stackErrTest,(predict(ada,newdata =spam.test))$error)
+  
+}
+
+for (i in 2:5) {
+  ada = adaboost(type~., spam.app , maxIter*i)
+  
+  index_Global = cbind(index_Global,maxIter*i) # L'index
+  stackErrApp= cbind(stackErrApp,(predict(ada,newdata =spam.app))$error) # L'erreur correspondante
+  stackErrTest= cbind(stackErrTest,(predict(ada,newdata =spam.test))$error)
+  
+}
+
+```
+
+On affiche la courbe :
+
+```{r}
+plot(x = index_Global,y = stackErrApp[1,],type = 'l',ylab = 'Erreur' , col = 'black', xlab = 'Nombre Iterations',ylim = c(0,0.15))
+lines(x = index_Global,y = stackErrTest[1,],type ='l',col = 'red')
+legend( 1,legend=c("Apprentissage", "Test"),col=c("black", "red"), lty=1:2, cex=0.8)
+```
+
+Aussi bien en apprentissage qu'en test , on voit que pour de faibles iterations(i < 5), l'erreur est forte et augmente, avant de commencer à diminuer. 
+Au bout de la 15-17e iteration, on ne gagne presque plus rien en test. 
+A ce moment là, au niveau du jeu d'apprentissage, l'erreur est quasi nulle et n'évolue plus. Augmentez le nombre d'itération à très peu d'interet. De notre point de vue, le nombre optimal se trouve dans cet interval [15,17]. 
+
+### Gradient boosting 
+
+##### 4.5 Meme procédé qu'avec adaboost : on commence par faire tourner l'algorithme à 10 iterations
+
+Chargement de la librairie de gradient boosting "gbm"
+```{r}
+library(gbm)
+```
+
+__Pretraitement pour le gbm__
+La distribution "Bernouli" requiert que la cible soit entre 0 et 1. On va donc faire une opération de mapping entre les données spam/non_spam avec les chiffre 0 et 1 
+
+```{r}
+spam.app$type = as.numeric(spam.app$type)-1
+spam.test$type = as.numeric(spam.test$type)-1
+#spam$type = as.numeric(spam$type) - 1
+t = rbind(spam.app,spam.test)
+```
+On construit le jeu de donnée spam de depart(appelé t) en combinant le jeu d'apprentissage au jeu de test.
+
+gbm avec les parametres par defaut : 
+
+```{r}
+gradBoosting = gbm(type~., distribution = "bernoulli",data = t, n.trees = 100,train.fraction = 0.80)
+```
+On précise au modele qu'on fait une separation en 80 - 2 via le parametre train.fraction. Néanmoins, les 80 elements qu'il recupere correspondent à notre decoupage en train/test précédent. 
+
+__Evaluation de l'erreur en apprentissage__
+
+```{r}
+predGbmApp = predict(gradBoosting,spam.app,type = 'response',100)
+errGbmApp = mean((predGbmApp>0.5) !=spam.app$type)
+predGbmTest = predict(gradBoosting , spam.test , type = 'response',100)
+errGbmTest = mean((predGbmTest>0.5) !=spam.test$type)
+
+cbind(errGbmApp,errGbmTest)
+```
+
+
+L'erreur en test est supérieure à celle de l'apprentissage mais reste très proche tout de meme.
+
+##### 4.6. Influence des differents parametres : nombre d’iterations (arbres), de la profondeur des arbres et du parametre de regularisation (shrinkage) 
+
+Construction des des différents ensemble pour le grid search
+```{r}
+stackErrGbmApp = vector()
+stackErrGbmTest = vector()
+indexShrinkage = seq(from=0.001, to=0.1, by=0.01)
+profondeur = seq(from = 1,to = 5 , by=1)
+interval_tree = cbind(seq(from = 10, to = 100, by = 20),seq(from = 200, to = 1000, by = 200))
+
+```
+
+
+```{r}
+stackErrGbm=array(dim = c(length(indexShrinkage),length(interval_tree),length(profondeur)),dimnames = list(indexShrinkage,interval_tree,profondeur))
+
+#Parcours de la liste des penalités 
+for (s in 1:length(indexShrinkage)) {
+  #Parcours des valeurs arbres
+  for (j in profondeur) {
+    gbm2 = gbm(type~.,distribution = "bernoulli",data = t, n.trees =  max(interval_tree),interaction.depth = j)
+    for (k in 1:length(interval_tree)) {
+      predict_gbmtest = predict(gbm2, newdata=spam.test,interval_tree[k],type = 'response')
+      stackErrGbm[s,k,j] = mean((predict_gbmtest>0.5)!=spam.test$type)
+    } 
+  }
+}
+  
+
+```
+
+
+On aurait bien voulu faire des plots mais on est à parametre et une sortie donc faudrait faire un schéma en 4D. On va donc se contenter de commenter l'évolution par les chiffres.
+
+Vu que ce n'est pas très conventionnel, on pense indiquer comment ces tableaux peuvent etre lues ;
+_La valeur ", , x" ou x appartient à 1,..5  désigne la profondeur des classifieur faibles_
+_La premiere colonne designe les valeurs de shrinkage_
+_La premiere ligne (du dessus), le nombre d'arbres_
+
+Commentaire de l'évolution en fonction des 3 parametres de profondeur, shrinkage et nombres d'arbres : 
+
+**Nombre d'arbres :** On remarque que plus le nombre d'arbres augmente, plus l'erreur décroit (lecture de la gauche vers la droite ). Les valeurs minimales d'erreur sont obtenues pour k = 800
+
+**Profondeur :**  (lecture du haut vers le bas ) il apparait également que plus la profondeur des arbres est élévée, plus l'erreur décroit vers 0. Néanmoins, on observe un effet plateau lorsque p > 3 (p == 4,5). En effet, bien vrai que l'erreur dimunie mais la differente n'est pas significative (difference de 0.001). De notre point de vue, allez chercher plus loin, ne fera qu'augmenter nos chance d'overfitting. 
+
+**Shrinkage :** Ce parametre permet de controler la vitesse descente. La meilleure valeur obtenue correspond à un shrinkage relativement faible (0.011). Cela est d'autant plus vraie pour des petites valeurs de profondeur. Lorsque la profondeur est trop grande, il n'y a quasiment plus de différence entre les résultats obtenues donc il est difficile de donné un poids à ce parametre. Evidemment, on se doute bien que si on avait fait un choix supérieur à 1, on aurait probablement divergé très vite.
+
+
+
+
+```{r}
+stackErrGbm[,1:length(interval_tree)-1,]
+```
+
+La meilleure erreur obtenu par le modele gbm est donc ceux de profondeur 3. En effet, aller chercher plus loin apporte très peu d'informations sinon le fait d'apprendre par coeur le jeu de données. 
+```{r}
+ErrMin = min(stackErrGbm[,1:length(interval_tree)-1,3])
+ParamOptimales = which.min(stackErrGbm[,1:length(interval_tree)-1,3])
+cbind(ParamOptimales, ErrMin)
+```
+
+L'erreur minimale est donc de 0.005 _(10 fois inferieur à celles d'Adaboost en test)_. 
+Les parametres optimaux sont : 
+Shrinkage 0.041, n.tree = 800, depth = 3
+
+__Modele final gbm__
+
+```{r}
+modelFinalGbm  = gbm(type~.,distribution = "bernoulli",data = t, n.trees =  800,shrinkage =  0.041,interaction.depth = 3)
+```
+
+
+
+##### 4.7 Conclusion - Choix du meilleur modele
+
+Nous avons fait _le choix du modèle gbm_ pour les raisons suivantes : 
+
+A l'opposé avec Adaboost, on a une erreur minimale qui est inférieur à 1%.Le gain est net. De notre point de vue, un modèle gbm est sans doute plus efficace que le modèle Adaboost.  
+
+Bien qu'il est vrai que la grille de recherche est beaucoup plus large pour le modele GBM, de notre point de vu, une difference de de 5% n'est tout meme pas négligeable. 
+
+Enfin, le temps de calcul du gbm en soit n'est pas excessif surtout comparativement à celui de Adaboost. 
+
+__Importance des Features :__ 
+
+```{r}
+summary(modelFinalGbm,las = 2,angle = 75)
+```
+
+On constate que les 3 variables les plus importantes pour la détermination de la catégorie du courrier sont : 
+charExclamation, charDollar et remove. C'est un résultat qui nous parait cohérent.
+
+
+
+

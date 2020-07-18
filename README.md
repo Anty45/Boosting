@@ -1,2 +1,2 @@
 # Boosting
-CART's Tree and Boosting on spam Dataset
+Adaboost and Gradient boosting on Spam Dataset
